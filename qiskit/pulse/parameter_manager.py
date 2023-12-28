@@ -57,7 +57,7 @@ from qiskit.circuit.parameter import Parameter
 from qiskit.circuit.parameterexpression import ParameterExpression, ParameterValueType
 from qiskit.pulse import instructions, channels
 from qiskit.pulse.exceptions import PulseError
-from qiskit.pulse.library import SymbolicPulse, Waveform
+from qiskit.pulse.library import ParametricPulse, SymbolicPulse, Waveform
 from qiskit.pulse.schedule import Schedule, ScheduleBlock
 from qiskit.pulse.transforms.alignments import AlignmentKind
 from qiskit.pulse.utils import format_parameter_value
@@ -146,7 +146,9 @@ class ParameterSetter(NodeVisitor):
         """Visit ``Schedule``. Recursively visit schedule children and overwrite."""
         # accessing to private member
         # TODO: consider updating Schedule to handle this more gracefully
-        node._Schedule__children = [(t0, self.visit(sched)) for t0, sched in node.instructions]
+        node._Schedule__children = [
+            (t0, self.visit(sched)) for t0, sched in node.instructions
+        ]
         node._renew_timeslots()
 
         self._update_parameter_manager(node)
@@ -207,6 +209,19 @@ class ParameterSetter(NodeVisitor):
 
         return node
 
+    def visit_ParametricPulse(self, node: ParametricPulse):
+        """Assign parameters to ``ParametricPulse`` object."""
+        if node.is_parameterized():
+            new_parameters = {}
+            for op, op_value in node.parameters.items():
+                if isinstance(op_value, ParameterExpression):
+                    op_value = self._assign_parameter_expression(op_value)
+                new_parameters[op] = op_value
+
+            return node.__class__(**new_parameters, name=node.name)
+
+        return node
+
     def visit_SymbolicPulse(self, node: SymbolicPulse):
         """Assign parameters to ``SymbolicPulse`` object."""
         if node.is_parameterized():
@@ -250,7 +265,9 @@ class ParameterSetter(NodeVisitor):
     def _update_parameter_manager(self, node: Union[Schedule, ScheduleBlock]):
         """A helper function to update parameter manager of pulse program."""
         if not hasattr(node, "_parameter_manager"):
-            raise PulseError(f"Node type {node.__class__.__name__} has no parameter manager.")
+            raise PulseError(
+                f"Node type {node.__class__.__name__} has no parameter manager."
+            )
 
         param_manager = node._parameter_manager
         updated = param_manager.parameters & self._param_map.keys()
@@ -321,6 +338,12 @@ class ParameterGetter(NodeVisitor):
     def visit_Channel(self, node: channels.Channel):
         """Get parameters from ``Channel`` object."""
         self.parameters |= node.parameters
+
+    def visit_ParametricPulse(self, node: ParametricPulse):
+        """Get parameters from ``ParametricPulse`` object."""
+        for op_value in node.parameters.values():
+            if isinstance(op_value, ParameterExpression):
+                self.parameters |= op_value.parameters
 
     def visit_SymbolicPulse(self, node: SymbolicPulse):
         """Get parameters from ``SymbolicPulse`` object."""

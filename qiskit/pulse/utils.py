@@ -18,6 +18,7 @@ import numpy as np
 
 from qiskit.circuit.parameterexpression import ParameterExpression
 from qiskit.pulse.exceptions import UnassignedDurationError, QiskitError
+from jax import core, numpy as jnp
 
 
 def format_meas_map(meas_map: List[List[int]]) -> Dict[int, List[int]]:
@@ -55,6 +56,8 @@ def format_parameter_value(
     try:
         # value is assigned.
         # note that ParameterExpression directly supports __complex__ via sympy or symengine
+        if isinstance(jnp.array(0), core.Tracer):
+            return operand._symbol_expr
         evaluated = complex(operand)
         # remove truncation error
         evaluated = np.round(evaluated, decimals=decimal)

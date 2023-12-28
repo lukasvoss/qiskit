@@ -23,13 +23,18 @@ from typing import Any, Dict, List, Optional, Union, Callable, Tuple
 from copy import deepcopy
 
 import numpy as np
-import symengine as sym
 
 from qiskit.circuit.parameterexpression import ParameterExpression, ParameterValueType
 from qiskit.pulse.exceptions import PulseError
 from qiskit.pulse.library.pulse import Pulse
 from qiskit.pulse.library.waveform import Waveform
+from qiskit.utils import optionals as _optional
 from qiskit.utils.deprecation import deprecate_arg
+
+if _optional.HAS_SYMENGINE:
+    import symengine as sym
+else:
+    import sympy as sym
 
 
 def _lifted_gaussian(
@@ -79,7 +84,9 @@ def _lifted_gaussian(
 
 
 @functools.lru_cache(maxsize=None)
-def _is_amplitude_valid(envelope_lam: Callable, time: Tuple[float, ...], *fargs: float) -> bool:
+def _is_amplitude_valid(
+    envelope_lam: Callable, time: Tuple[float, ...], *fargs: float
+) -> bool:
     """A helper function to validate maximum amplitude limit.
 
     Result is cached for better performance.
@@ -160,7 +167,9 @@ class LambdifiedExpression:
     def __get__(self, instance, owner) -> Callable:
         expr = getattr(instance, self.attribute, None)
         if expr is None:
-            raise PulseError(f"'{self.attribute}' of '{instance.pulse_type}' is not assigned.")
+            raise PulseError(
+                f"'{self.attribute}' of '{instance.pulse_type}' is not assigned."
+            )
         key = hash(expr)
         if key not in self.lambda_funcs:
             self.__set__(instance, expr)
@@ -178,31 +187,36 @@ class LambdifiedExpression:
                     continue
                 params.append(p)
 
-            try:
-                lamb = sym.lambdify(params, [value], real=False)
+            if _optional.HAS_SYMENGINE:
+                try:
+                    lamb = sym.lambdify(params, [value], real=False)
 
-                def _wrapped_lamb(*args):
-                    if isinstance(args[0], np.ndarray):
-                        # When the args[0] is a vector ("t"), tile other arguments args[1:]
-                        # to prevent evaluation from looping over each element in t.
-                        t = args[0]
-                        args = np.hstack(
-                            (
-                                t.reshape(t.size, 1),
-                                np.tile(args[1:], t.size).reshape(t.size, len(args) - 1),
+                    def _wrapped_lamb(*args):
+                        if isinstance(args[0], np.ndarray):
+                            # When the args[0] is a vector ("t"), tile other arguments args[1:]
+                            # to prevent evaluation from looping over each element in t.
+                            t = args[0]
+                            args = np.hstack(
+                                (
+                                    t.reshape(t.size, 1),
+                                    np.tile(args[1:], t.size).reshape(
+                                        t.size, len(args) - 1
+                                    ),
+                                )
                             )
-                        )
-                    return lamb(args)
+                        return lamb(args)
 
-                func = _wrapped_lamb
-            except RuntimeError:
-                # Currently symengine doesn't support complex_double version for
-                # several functions such as comparison operator and piecewise.
-                # If expression contains these function, it fall back to sympy lambdify.
-                # See https://github.com/symengine/symengine.py/issues/406 for details.
-                import sympy
+                    func = _wrapped_lamb
+                except RuntimeError:
+                    # Currently symengine doesn't support complex_double version for
+                    # several functions such as comparison operator and piecewise.
+                    # If expression contains these function, it fall back to sympy lambdify.
+                    # See https://github.com/symengine/symengine.py/issues/406 for details.
+                    import sympy
 
-                func = sympy.lambdify(params, value)
+                    func = sympy.lambdify(params, value)
+            else:
+                func = sym.lambdify(params, value)
 
             self.lambda_funcs[key] = func
 
@@ -452,7 +466,9 @@ class SymbolicPulse(Pulse):
         # Get pulse parameters with attribute-like access.
         params = object.__getattribute__(self, "_params")
         if item not in params:
-            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{item}'")
+            raise AttributeError(
+                f"'{self.__class__.__name__}' object has no attribute '{item}'"
+            )
         return params[item]
 
     @property
@@ -494,7 +510,9 @@ class SymbolicPulse(Pulse):
             PulseError: When expression for pulse envelope is not assigned.
         """
         if self.is_parameterized():
-            raise PulseError("Unassigned parameter exists. All parameters must be assigned.")
+            raise PulseError(
+                "Unassigned parameter exists. All parameters must be assigned."
+            )
 
         if self._envelope is None:
             raise PulseError("Pulse envelope expression is not assigned.")
@@ -522,7 +540,9 @@ class SymbolicPulse(Pulse):
 
         if self._limit_amplitude:
             if self._valid_amp_conditions is not None:
-                fargs = _get_expression_args(self._valid_amp_conditions, self.parameters)
+                fargs = _get_expression_args(
+                    self._valid_amp_conditions, self.parameters
+                )
                 check_full_waveform = not bool(self._valid_amp_conditions_lam(*fargs))
             else:
                 check_full_waveform = True
@@ -533,8 +553,12 @@ class SymbolicPulse(Pulse):
                 # This operation is slower due to overhead of 'get_waveform'.
                 fargs = _get_expression_args(self._envelope, self.parameters)
 
-                if not _is_amplitude_valid(self._envelope_lam, tuple(fargs.pop(0)), *fargs):
-                    param_repr = ", ".join(f"{p}={v}" for p, v in self.parameters.items())
+                if not _is_amplitude_valid(
+                    self._envelope_lam, tuple(fargs.pop(0)), *fargs
+                ):
+                    param_repr = ", ".join(
+                        f"{p}={v}" for p, v in self.parameters.items()
+                    )
                     raise PulseError(
                         f"Maximum pulse amplitude norm exceeds 1.0 with parameters {param_repr}."
                         "This can be overruled by setting Pulse.limit_amplitude."
@@ -542,7 +566,9 @@ class SymbolicPulse(Pulse):
 
     def is_parameterized(self) -> bool:
         """Return True iff the instruction is parameterized."""
-        return any(isinstance(val, ParameterExpression) for val in self.parameters.values())
+        return any(
+            isinstance(val, ParameterExpression) for val in self.parameters.values()
+        )
 
     @property
     def parameters(self) -> Dict[str, Any]:
@@ -551,7 +577,6 @@ class SymbolicPulse(Pulse):
         return params
 
     def __eq__(self, other: "SymbolicPulse") -> bool:
-
         if not isinstance(other, SymbolicPulse):
             return NotImplemented
 
@@ -603,7 +628,6 @@ class ScalableSymbolicPulse(SymbolicPulse):
             "Instead, use a float for ``amp`` (for the magnitude) and a float for ``angle``"
         ),
         since="0.25.0",
-        package_name="qiskit-terra",
         pending=False,
         predicate=lambda amp: isinstance(amp, complex),
     )
@@ -691,7 +715,10 @@ class ScalableSymbolicPulse(SymbolicPulse):
                 return False
 
         for key in self.parameters:
-            if key not in ["amp", "angle"] and self.parameters[key] != other.parameters[key]:
+            if (
+                key not in ["amp", "angle"]
+                and self.parameters[key] != other.parameters[key]
+            ):
                 return False
 
         return True
@@ -772,11 +799,15 @@ class Gaussian(metaclass=_PulseType):
         parameters = {"sigma": sigma}
 
         # Prepare symbolic expressions
-        _t, _duration, _amp, _sigma, _angle = sym.symbols("t, duration, amp, sigma, angle")
+        _t, _duration, _amp, _sigma, _angle = sym.symbols(
+            "t, duration, amp, sigma, angle"
+        )
         _center = _duration / 2
 
         envelope_expr = (
-            _amp * sym.exp(sym.I * _angle) * _lifted_gaussian(_t, _center, _duration + 1, _sigma)
+            _amp
+            * sym.exp(sym.I * _angle)
+            * _lifted_gaussian(_t, _center, _duration + 1, _sigma)
         )
 
         consts_expr = _sigma > 0
@@ -900,7 +931,9 @@ class GaussianSquare(metaclass=_PulseType):
             _amp
             * sym.exp(sym.I * _angle)
             * sym.Piecewise(
-                (_gaussian_ledge, _t <= _sq_t0), (_gaussian_redge, _t >= _sq_t1), (1, True)
+                (_gaussian_ledge, _t <= _sq_t0),
+                (_gaussian_redge, _t >= _sq_t1),
+                (1, True),
             )
         )
 
@@ -1223,7 +1256,9 @@ def gaussian_square_echo(
     )
 
     envelope_expr = sym.Piecewise(
-        (envelope_expr_p, _t <= _duration / 2), (envelope_expr_echo, _t >= _duration / 2), (0, True)
+        (envelope_expr_p, _t <= _duration / 2),
+        (envelope_expr_echo, _t >= _duration / 2),
+        (0, True),
     )
 
     # gaussian square for active cancellation tone
@@ -1407,10 +1442,14 @@ class Drag(metaclass=_PulseType):
         _gauss = _lifted_gaussian(_t, _center, _duration + 1, _sigma)
         _deriv = -(_t - _center) / (_sigma**2) * _gauss
 
-        envelope_expr = _amp * sym.exp(sym.I * _angle) * (_gauss + sym.I * _beta * _deriv)
+        envelope_expr = (
+            _amp * sym.exp(sym.I * _angle) * (_gauss + sym.I * _beta * _deriv)
+        )
 
         consts_expr = _sigma > 0
-        valid_amp_conditions_expr = sym.And(sym.Abs(_amp) <= 1.0, sym.Abs(_beta) < _sigma)
+        valid_amp_conditions_expr = sym.And(
+            sym.Abs(_amp) <= 1.0, sym.Abs(_beta) < _sigma
+        )
 
         return ScalableSymbolicPulse(
             pulse_type="Drag",
@@ -1465,7 +1504,8 @@ class Constant(metaclass=_PulseType):
         # Note this is implemented using Piecewise instead of just returning amp
         # directly because otherwise the expression has no t dependence and sympy's
         # lambdify will produce a function f that for an array t returns amp
-        # instead of amp * np.ones(t.shape).
+        # instead of amp * np.ones(t.shape). This does not work well with
+        # ParametricPulse.get_waveform().
         #
         # See: https://github.com/sympy/sympy/issues/5642
         envelope_expr = (
@@ -1529,9 +1569,13 @@ def Sin(
     parameters = {"freq": freq, "phase": phase}
 
     # Prepare symbolic expressions
-    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols("t, duration, amp, angle, freq, phase")
+    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols(
+        "t, duration, amp, angle, freq, phase"
+    )
 
-    envelope_expr = _amp * sym.exp(sym.I * _angle) * sym.sin(2 * sym.pi * _freq * _t + _phase)
+    envelope_expr = (
+        _amp * sym.exp(sym.I * _angle) * sym.sin(2 * sym.pi * _freq * _t + _phase)
+    )
 
     consts_expr = sym.And(_freq > 0, _freq < 0.5)
 
@@ -1593,9 +1637,13 @@ def Cos(
     parameters = {"freq": freq, "phase": phase}
 
     # Prepare symbolic expressions
-    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols("t, duration, amp, angle, freq, phase")
+    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols(
+        "t, duration, amp, angle, freq, phase"
+    )
 
-    envelope_expr = _amp * sym.exp(sym.I * _angle) * sym.cos(2 * sym.pi * _freq * _t + _phase)
+    envelope_expr = (
+        _amp * sym.exp(sym.I * _angle) * sym.cos(2 * sym.pi * _freq * _t + _phase)
+    )
 
     consts_expr = sym.And(_freq > 0, _freq < 0.5)
 
@@ -1660,10 +1708,14 @@ def Sawtooth(
     parameters = {"freq": freq, "phase": phase}
 
     # Prepare symbolic expressions
-    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols("t, duration, amp, angle, freq, phase")
+    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols(
+        "t, duration, amp, angle, freq, phase"
+    )
     lin_expr = _t * _freq + _phase / (2 * sym.pi)
 
-    envelope_expr = 2 * _amp * sym.exp(sym.I * _angle) * (lin_expr - sym.floor(lin_expr + 1 / 2))
+    envelope_expr = (
+        2 * _amp * sym.exp(sym.I * _angle) * (lin_expr - sym.floor(lin_expr + 1 / 2))
+    )
 
     consts_expr = sym.And(_freq > 0, _freq < 0.5)
 
@@ -1727,7 +1779,9 @@ def Triangle(
     parameters = {"freq": freq, "phase": phase}
 
     # Prepare symbolic expressions
-    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols("t, duration, amp, angle, freq, phase")
+    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols(
+        "t, duration, amp, angle, freq, phase"
+    )
     lin_expr = _t * _freq + _phase / (2 * sym.pi) - 0.25
     sawtooth_expr = 2 * (lin_expr - sym.floor(lin_expr + 1 / 2))
 
@@ -1796,11 +1850,15 @@ def Square(
     parameters = {"freq": freq, "phase": phase}
 
     # Prepare symbolic expressions
-    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols("t, duration, amp, angle, freq, phase")
+    _t, _duration, _amp, _angle, _freq, _phase = sym.symbols(
+        "t, duration, amp, angle, freq, phase"
+    )
     _x = _freq * _t + _phase / (2 * sym.pi)
 
     envelope_expr = (
-        _amp * sym.exp(sym.I * _angle) * (2 * (2 * sym.floor(_x) - sym.floor(2 * _x)) + 1)
+        _amp
+        * sym.exp(sym.I * _angle)
+        * (2 * (2 * sym.floor(_x) - sym.floor(2 * _x)) + 1)
     )
 
     consts_expr = sym.And(_freq > 0, _freq < 0.5)
@@ -1878,7 +1936,9 @@ def Sech(
 
     if zero_ends:
         shift_val = complex_amp * sym.sech((-1 - (_duration / 2)) / _sigma)
-        envelope_expr = complex_amp * (envelope_expr - shift_val) / (complex_amp - shift_val)
+        envelope_expr = (
+            complex_amp * (envelope_expr - shift_val) / (complex_amp - shift_val)
+        )
 
     consts_expr = _sigma > 0
 
